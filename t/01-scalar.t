@@ -88,16 +88,16 @@ for my $want_num_threads ( 1 .. 16 ) {
 
   # SvTYPE
   $output = testSvTYPE(undef);
-  like($output, qr/Undefined/, "Testing type via SvTYPE");
+  like $output, qr/Undefined/, "Testing type via SvTYPE";
 
   $output = testSvTYPE(42);
-  like($output, qr/Integer/, "Testing type, SVt_IV, via SvTYPE");
+  like $output, qr/Integer/, "Testing type, SVt_IV, via SvTYPE";
 
   $output = testSvTYPE(42.42);
-  like($output, qr/Float/, "Testing type, SVt_NV, via SvTYPE");
+  like $output, qr/Float/, "Testing type, SVt_NV, via SvTYPE";
 
   $output = testSvTYPE("Hello");
-  like($output, qr/String/, "Testing type, SVt_PV, via SvTYPE");
+  like $output, qr/String/, "Testing type, SVt_PV, via SvTYPE";
 
 # the following tests seem to reveal a bug or regression in SvTYPE
 =pod

@@ -9,6 +9,8 @@ use Inline (
     C    => 'DATA',
     with => qw/OpenMP::Simple/,
 );
+
+$ENV{PERL_HASH_SEED} = 0;
    
 my $omp = OpenMP->new;
    
@@ -272,25 +274,17 @@ SV* test_hv_array(HV *hash, int iterations) {
     // Parallelize using OpenMP, each thread calls HvARRAY and iterates independently
     #pragma omp parallel for
     for (int i = 0; i < iterations; i++) {
-      HE **entries = HvARRAY(hash); // Each thread gets its own array of hash entries
-      int my_num_keys = HvKEYS(hash);  // Get the number of keys in the hash
-      int my_key_count = 0;
-      for (int j = 0; j < my_num_keys; j++) {
-        HE *entry = entries[j]; // Get the hash entry
-// NOTE: this section is really sensitive to a rehash (?) - how can this be prevented? 
-/*
-        if (entry) {
-          SV *key_sv = HeKEY(entry); // Get the key
-          if (key_sv) {
-            STRLEN len;
-            char *key = SvPV(key_sv, len); // Convert to C string
-            SV **value = hv_fetch(hash, key, len, 0); // Fetch value
-            if (value) {
-              my_key_count++;
-            }
-          }
+      int my_num_keys = 0;
+      HE **buckets = HvARRAY(hash); // Each thread gets its own array of hash entries
+      int n_buckets = HvMAX(hash);
+      for (int j=0; j < n_buckets; j++) {
+        HE *he= buckets[j];
+        while (he) {
+          //print_he_key(he); // complicated code...
+          //print_sv(HeVAL(he));
+          he = HeNEXT(he);
+          ++my_num_keys;
         }
-*/
       }
       int tid = omp_get_thread_num();
       if (tid == 0) {

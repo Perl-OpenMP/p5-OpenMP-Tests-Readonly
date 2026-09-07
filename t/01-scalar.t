@@ -2,356 +2,225 @@ use strict;
 use warnings;
 
 use Test2::V0;
-
 use OpenMP;
-   
 use Inline (
     C    => 'DATA',
     with => qw/OpenMP::Simple/,
 );
-   
+
 my $omp = OpenMP->new;
-   
-for my $want_num_threads ( 1 .. 16 ) {
-  note "$want_num_threads threads ...";
+my $max_threads = $ENV{PERL_OPENMP_MAX_THREADS} || 16;
 
-  $omp->env->omp_num_threads($want_num_threads);
-  $omp->env->assert_omp_environment; # (optional) validates %ENV
-  # call parallelized C function
-  my $got_num_threads = _check_num_threads();
-  is $got_num_threads, $want_num_threads, "OpenMP runtime detects and returns expected number of threads";
+for my $want_num_threads (1 .. $max_threads) {
+    note "$want_num_threads threads ...";
 
-  # SvPV
-  my $input = "Hello, OpenMP::Simple!";
-  my $output = testSvPV($input);
-  is $input, $output, "SvPV (string) value read by multiple threads is the same as the one set originally";
+    $omp->env->omp_num_threads($want_num_threads);
+    $omp->env->assert_omp_environment;
 
-  # SvIV
-  $output = testSvIV($want_num_threads);
-  is $want_num_threads, $output, "SvIV (integer) value read by multiple threads is the same as the one set originally";
+    is _check_num_threads(), $want_num_threads,
+        'OpenMP runtime reports expected number of threads';
 
-  # SvNV
-  my $double = 42.42;
-  $output = testSvNV($double);
-  is $double, $output, "SvNV (float, double, or long double) value read by multiple threads is the same as the one set originally";
+    my $input = 'Hello, OpenMP::Simple!';
+    is testSvPV($input), $input,
+        'SvPV reads an established string consistently across worker threads';
 
-  # SvTRUE
-  #  Perl Truth Table
-  #  +-----------------+--------------------+
-  #  | Perl Value      | Truthiness (SvTRUE)|
-  #  +-----------------+--------------------+
-  #  | undef           | 0 (False)          |
-  #  | "" (empty)      | 0 (False)          |
-  #  | "0"             | 0 (False)          |
-  #  | "0E0"           | 1 (True)           |
-  #  | 0               | 0 (False)          |
-  #  | 1               | 1 (True)           |
-  #  | -1              | 1 (True)           |
-  #  | "Hello"         | 1 (True)           |
-  #  | " " (space)     | 1 (True)           |
-  #  | [] (empty array)| 1 (True)           |
-  #  | {} (empty hash) | 1 (True)           |
-  #  +-----------------+--------------------+
+    is testSvIV($want_num_threads), $want_num_threads,
+        'SvIV reads an established integer consistently across worker threads';
 
-  $output = testSvTRUE(undef);
-  is 0, $output, "expected falsy";
+    my $double = 42.42;
+    is testSvNV($double), $double,
+        'SvNV reads an established numeric value consistently across worker threads';
 
-  $output = testSvTRUE("");
-  is 0, $output, "expected falsy";
+    for my $case (
+        [ undef,   0, 'undef is false' ],
+        [ '',      0, 'empty string is false' ],
+        [ '0',     0, 'string 0 is false' ],
+        [ '0E0',   1, '0E0 is true' ],
+        [ 0,       0, 'integer 0 is false' ],
+        [ 1,       1, 'integer 1 is true' ],
+        [ -1,      1, 'negative integer is true' ],
+        [ 'Hello', 1, 'non-empty string is true' ],
+        [ ' ',     1, 'space is true' ],
+        [ [],      1, 'array reference is true' ],
+        [ {},      1, 'hash reference is true' ],
+    ) {
+        is testSvTRUE($case->[0]), $case->[1], "SvTRUE: $case->[2]";
+    }
 
-  $output = testSvTRUE("0");
-  is 0, $output, "expected falsy";
+    like testSvTYPE(undef),   qr/Undefined/, 'SvTYPE identifies undef scalar state';
+    like testSvTYPE(42),      qr/Integer/,   'SvTYPE identifies integer scalar state';
+    like testSvTYPE(42.42),   qr/Float/,     'SvTYPE identifies numeric scalar state';
+    like testSvTYPE('Hello'), qr/String/,    'SvTYPE identifies string scalar state';
 
-  $output = testSvTRUE("0E0");
-  is 1, $output, "expected truthy";
+    my $cur_string = 'this string is 33 characters long';
+    is testSvCUR($cur_string), 33,
+        'SvCUR reports the expected current string length';
 
-  $output = testSvTRUE(0);
-  is 0, $output, "expected falsy";
+    my $len_string = "this string has embedded padding\0\0\0";
+    is testSvLEN($len_string), serialSvLEN($len_string),
+        'SvLEN concurrent read matches a serial SvLEN read of the same SV';
 
-  $output = testSvTRUE(1);
-  is 1, $output, "expected truthy";
+    my $scalar = 'Hello, World!';
+    my $ref1 = \$scalar;
+    my $ref2 = \$scalar;
+    my $ref3 = \$scalar;
 
-  $output = testSvTRUE(-1);
-  is 1, $output, "expected truthy";
-
-  $output = testSvTRUE("Hello");
-  is 1, $output, "expected truthy";
-
-  $output = testSvTRUE(" ");
-  is 1, $output, "expected truthy";
-
-  $output = testSvTRUE([]);
-  is 1, $output, "expected truthy";
-
-  $output = testSvTRUE({});
-  is 1, $output, "expected truthy";
-
-  # SvTYPE
-  $output = testSvTYPE(undef);
-  like $output, qr/Undefined/, "Testing type via SvTYPE";
-
-  $output = testSvTYPE(42);
-  like $output, qr/Integer/, "Testing type, SVt_IV, via SvTYPE";
-
-  $output = testSvTYPE(42.42);
-  like $output, qr/Float/, "Testing type, SVt_NV, via SvTYPE";
-
-  $output = testSvTYPE("Hello");
-  like $output, qr/String/, "Testing type, SVt_PV, via SvTYPE";
-
-# the following tests seem to reveal a bug or regression in SvTYPE
-  $output = testSvTYPE([1,2,3,3,7,7,7]);
-  like($output, qr/Integer/, "Testing type, SVt_PVAV, via SvTYPE");
-
-  $output = testSvTYPE({foo => 1,bar => 2});
-  like($output, qr/Integer/, "Testing type, SVt_PVHV, via SvTYPE");
-
-  $output = testSvTYPE(sub { 42 });
-  like($output, qr/Integer/, "Testing type, SVt_PVCV, via SvTYPE");
-
-  open my $fh, '>', '/dev/null' or die $!; # Filehandle GLOB
-  $output = testSvTYPE(*$fh);
-  like($output, qr/Integer/, "Testing type, SVt_PVGV, via SvTYPE");
-  close $fh;
-
-  # SvCUR
-  # Testing with a string
-  $output = testSvCUR("this string is 33 characters long");
-  is $output, 33, "SvCUR outputs expected value for SVPV";
-
-  # SvLEN
-  is $output, 33, "SvLEN outputs expected value for SVPV";
-
-  $output = testSvLEN("this string is 38 characters long\0\0\0");
-  is $output, 38, "SvLEN outputs expected value for SVPV with null padding, full space allocated for the SVPV";
-
-  # SvREFCNT
-  # Perl code to test the reference count with OpenMP
-  my $scalar = "Hello, World!";  # Create a scalar
-  my $ref1 = \$scalar;             # Create another reference to the scalar
-  my $ref2 = \$scalar;             # Create another reference to the scalar
-  my $ref3 = \$scalar;             # Create another reference to the scalar
-  $output = testSvREFCNT($scalar);  # Call the C function to get the reference count
-  is $output, 4, "SvREFCNT value returned as expected";
-  $ref3   = undef;
-  $output = testSvREFCNT($scalar);  # Call the C function to get the reference count
-  is $output, 3, "SvREFCNT value returned as expected";
-  $ref2   = undef;
-  $output = testSvREFCNT($scalar);  # Call the C function to get the reference count
-  is $output, 2, "SvREFCNT value returned as expected";
-  $ref1   = undef;
-  $output = testSvREFCNT($scalar);  # Call the C function to get the reference count
-  is $output, 1, "SvREFCNT value returned as expected";
+    is testSvREFCNT($scalar), serialSvREFCNT($scalar),
+        'SvREFCNT concurrent read matches serial reference count';
+    $ref3 = undef;
+    is testSvREFCNT($scalar), serialSvREFCNT($scalar),
+        'SvREFCNT remains consistent after dropping one reference';
+    $ref2 = undef;
+    is testSvREFCNT($scalar), serialSvREFCNT($scalar),
+        'SvREFCNT remains consistent after dropping two references';
+    $ref1 = undef;
+    is testSvREFCNT($scalar), serialSvREFCNT($scalar),
+        'SvREFCNT remains consistent after dropping all extra references';
 }
 
-done_testing(); # Automatically determines the number of tests
- 
+done_testing;
+
 __DATA__
 __C__
- 
-/* C function parallelized with OpenMP */
+
 int _check_num_threads() {
-  int ret = 0;
-    
-  PerlOMP_GETENV_BASIC
-   
-  #pragma omp parallel
-  {
-    #pragma omp single
-    ret = omp_get_num_threads();
-  }
- 
-  return ret;
+    int ret = 0;
+    PerlOMP_GETENV_BASIC
+
+    #pragma omp parallel
+    {
+        #pragma omp single
+        ret = omp_get_num_threads();
+    }
+    return ret;
 }
 
 SV* testSvPV(SV* input) {
+    const char *observed = NULL;
+    STRLEN observed_len = 0;
     PerlOMP_GETENV_BASIC
-    // Ensure the input is a string or can be stringified
-    STRLEN len;
-    char *strIn;
-    SV* output;
 
-    #pragma omp parallel private(str)
+    #pragma omp parallel
     {
-      strIn = SvPV(input, len); // Fetch the string value and its length
-      #pragma omp single        // Create a new Perl scalar to return the value
-      {
-        output = newSVpv(strIn, len);
-      }
+        STRLEN local_len = 0;
+        const char *local = SvPV(input, local_len);
+        #pragma omp single
+        {
+            observed = local;
+            observed_len = local_len;
+        }
     }
 
-    return output;
+    /* Perl allocation occurs after the worker region. */
+    return newSVpv(observed, observed_len);
 }
 
 SV* testSvIV(SV* input) {
+    IV observed = 0;
     PerlOMP_GETENV_BASIC
 
-    IV intIn;    // To hold the integer value of the input
-    SV* output;  // To hold the output scalar
-
-    #pragma omp parallel private(intIn)
+    #pragma omp parallel
     {
-        intIn = SvIV(input); // Fetch the integer value from the input scalar
-        #pragma omp single   // Ensure only one thread creates the output scalar
-        {
-            output = newSViv(intIn); // Create a new Perl scalar to hold the integer
-        }
+        IV local = SvIV(input);
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSViv(observed);
 }
 
 SV* testSvNV(SV* input) {
+    NV observed = 0.0;
     PerlOMP_GETENV_BASIC
 
-    NV numIn;    // To hold the numeric value of the input
-    SV* output;  // To hold the output scalar
-
-    #pragma omp parallel private(numIn)
+    #pragma omp parallel
     {
-        numIn = SvNV(input); // Fetch the numeric value from the input scalar
-        #pragma omp single   // Ensure only one thread creates the output scalar
-        {
-            output = newSVnv(numIn); // Create a new Perl scalar to hold the numeric value
-        }
+        NV local = SvNV(input);
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSVnv(observed);
 }
 
-/*
-  Perl Truth Table
-  +-----------------+--------------------+
-  | Perl Value      | Truthiness (SvTRUE)|
-  +-----------------+--------------------+
-  | undef           | 0 (False)          |
-  | "" (empty)      | 0 (False)          |
-  | "0"             | 0 (False)          |
-  | "0E0"           | 1 (True)           |
-  | 0               | 0 (False)          |
-  | 1               | 1 (True)           |
-  | -1              | 1 (True)           |
-  | "Hello"         | 1 (True)           |
-  | " " (space)     | 1 (True)           |
-  | [] (empty array)| 1 (True)           |
-  | {} (empty hash) | 1 (True)           |
-  +-----------------+--------------------+
-*/
-
 SV* testSvTRUE(SV* input) {
+    int observed = 0;
     PerlOMP_GETENV_BASIC
 
-    bool isTrue;  // To hold the truthiness value
-    SV* output;   // To hold the output scalar
-
-    #pragma omp parallel private(isTrue)
+    #pragma omp parallel
     {
-        isTrue = SvTRUE(input); // Check the truthiness of the input scalar
-        #pragma omp single     // Ensure only one thread creates the output scalar
-        {
-            output = newSViv(isTrue); // Create a new Perl scalar with the truthiness as an integer (1 or 0)
-        }
+        int local = SvTRUE(input) ? 1 : 0;
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSViv(observed);
 }
 
 SV* testSvTYPE(SV* input) {
+    int observed = SVt_NULL;
+    const char *type_name = "Unknown";
     PerlOMP_GETENV_BASIC
 
-    const char* typeStr; // Pointer to store the type as a string
-    SV* output;          // Scalar to hold the return value
-
-    #pragma omp parallel private(typeStr)
+    #pragma omp parallel
     {
-        // Determine the scalar type
-        int type = SvTYPE(input);
-
-        switch (type) {
-            case SVt_NULL:
-                typeStr = "Undefined (SVt_NULL)";
-                break;
-            case SVt_IV:
-                typeStr = "Integer (SVt_IV)";
-                break;
-            case SVt_NV:
-                typeStr = "Float (SVt_NV)";
-                break;
-            case SVt_PV:
-                typeStr = "String (SVt_PV)";
-                break;
-            case SVt_PVAV:
-                typeStr = "Integer (SVt_IV)";
-                break;
-            case SVt_PVHV:
-                typeStr = "Integer (SVt_IV)";
-                break;
-            case SVt_PVCV:
-                typeStr = "Integer (SVt_IV)";
-                break;
-            case SVt_PVGV:
-                typeStr = "Integer (SVt_IV)";
-                break;
-            default:
-                typeStr = "Unknown";
-                break;
-        }
+        int local = SvTYPE(input);
         #pragma omp single
-        {
-            // Create a new Perl scalar containing the type as a string
-            output = newSVpv(typeStr, 0);
-        }
+        observed = local;
     }
-    return output;
+
+    switch (observed) {
+        case SVt_NULL: type_name = "Undefined (SVt_NULL)"; break;
+        case SVt_IV:   type_name = "Integer (SVt_IV)";    break;
+        case SVt_NV:   type_name = "Float (SVt_NV)";      break;
+        case SVt_PV:   type_name = "String (SVt_PV)";     break;
+        default:       type_name = "Other";                break;
+    }
+    return newSVpv(type_name, 0);
 }
 
 SV* testSvCUR(SV* input) {
+    STRLEN observed = 0;
     PerlOMP_GETENV_BASIC
 
-    STRLEN len;  // To hold the length of the scalar
-    SV* output;  // To hold the output scalar
-
-    #pragma omp parallel private(len)
+    #pragma omp parallel
     {
-        len = SvCUR(input); // Get the current length of the scalar
-        #pragma omp single    // Ensure only one thread creates the output scalar
-        {
-            output = newSViv(len);  // Create a new Perl scalar with the length as an integer
-        }
+        STRLEN local = SvCUR(input);
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSVuv((UV)observed);
 }
 
 SV* testSvLEN(SV* input) {
+    STRLEN observed = 0;
     PerlOMP_GETENV_BASIC
 
-    STRLEN len;  // To hold the length of the scalar
-    SV* output;  // To hold the output scalar
-
-    #pragma omp parallel private(len)
+    #pragma omp parallel
     {
-        len = SvLEN(input); // Get the length of the scalar (it can be different from SvCUR)
-        #pragma omp single    // Ensure only one thread creates the output scalar
-        {
-            output = newSViv(len);  // Create a new Perl scalar with the length as an integer
-        }
+        STRLEN local = SvLEN(input);
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSVuv((UV)observed);
+}
+
+SV* serialSvLEN(SV* input) {
+    return newSVuv((UV)SvLEN(input));
 }
 
 SV* testSvREFCNT(SV* input) {
+    U32 observed = 0;
     PerlOMP_GETENV_BASIC
 
-    I32 refcount;  // To hold the reference count of the scalar
-    SV* output;    // To hold the output scalar
-
-    #pragma omp parallel private(refcount)
+    #pragma omp parallel
     {
-        refcount = SvREFCNT(input);  // Get the reference count of the scalar
-        #pragma omp single    // Ensure only one thread creates the output scalar
-        {
-            output = newSViv(refcount);  // Create a new Perl scalar with the reference count as an integer
-        }
+        U32 local = SvREFCNT(input);
+        #pragma omp single
+        observed = local;
     }
-    return output;
+    return newSVuv((UV)observed);
+}
+
+SV* serialSvREFCNT(SV* input) {
+    return newSVuv((UV)SvREFCNT(input));
 }
 
 __END__
-

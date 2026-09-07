@@ -1,0 +1,6 @@
+/_Inline/
+/.build/
+/blib/
+/cover_db/
+*.bak
+*.old

@@ -2,345 +2,196 @@ use strict;
 use warnings;
 
 use Test2::V0;
-
 use OpenMP;
-   
 use Inline (
     C    => 'DATA',
     with => qw/OpenMP::Simple/,
 );
 
-$ENV{PERL_HASH_SEED} = 0;
-   
 my $omp = OpenMP->new;
-   
-for my $want_num_threads ( 1 .. 16 ) {
-  note "$want_num_threads threads ...";
+my $max_threads = $ENV{PERL_OPENMP_MAX_THREADS} || 16;
+my $iterations  = $ENV{PERL_OPENMP_ITERATIONS}  || 1_000_000;
 
-  $omp->env->omp_num_threads($want_num_threads);
-  $omp->env->assert_omp_environment; # (optional) validates %ENV
-  # call parallelized C function
-  my $got_num_threads = _check_num_threads();
-  is $got_num_threads, $want_num_threads, "OpenMP runtime detects and returns expected number of threads";
+for my $want_num_threads (1 .. $max_threads) {
+    note "$want_num_threads threads; $iterations stress iterations ...";
 
-  my $hash = {
-    key1 => 42,
-    key2 => 84,
-    key3 => 168,
-    key4 => 2*168,
-  };
+    $omp->env->omp_num_threads($want_num_threads);
+    $omp->env->assert_omp_environment;
 
-  my $iterations = 1000000;
+    is _check_num_threads(), $want_num_threads,
+        'OpenMP runtime reports expected number of threads';
 
-  # Call the C function that fetches values in parallel
-  my $output = test_hv_fetch($hash, [keys %$hash],  $iterations);
-  is $output, 4, "testing hv_fetch for expected count";
+    my $hash = {
+        key1 => 42,
+        key2 => 84,
+        key3 => 168,
+        key4 => 336,
+    };
 
-  $output = test_hv_exists($hash, [keys %$hash],  $iterations);
-  is $output, 4, "testing hv_exists for expected count";
-
-  # don't think hv_iterinit and hv_iternext are thread safe
-  #$output = test_hv_iternext($hash, [keys %$hash],  $iterations);
-  #is $output, 4, "testing hv_iterinit and hv_iternext for expected count";
-
-  $output = test_hv_iterval($hash, $iterations);
-  is $output, 4, "testing hv_iterval for expected count";
-
-  $output = test_hv_keys($hash, $iterations);
-  is $output, 4, "testing HvKEYS for expected count";
-
-  $output = test_hv_usedkeys($hash, $iterations);
-  is $output, 4, "testing HvUSEDKEYS for expected count";
-
-  $output = test_hv_totalkeys($hash, $iterations);
-  is $output, 4, "testing HvTOTALKEYS for expected count";
-
-  $output = test_hv_array($hash, $iterations);
-  is $output, 4, "testing HvARRAY for expected count";
+    is test_hv_fetch($hash, $iterations), 4,
+        'hv_fetch(..., lval=0) repeatedly reads all established keys';
+    is test_hv_exists($hash, $iterations), 4,
+        'hv_exists repeatedly observes all established keys';
+    is test_hv_iterval($hash, $iterations), 4,
+        'hv_iterval repeatedly reads values through HE pointers staged serially';
+    is test_hv_keys($hash, $iterations), 4,
+        'HvKEYS remains stable during concurrent read-only access';
+    is test_hv_usedkeys($hash, $iterations), 4,
+        'HvUSEDKEYS remains stable during concurrent read-only access';
+    is test_hv_totalkeys($hash, $iterations), 4,
+        'HvTOTALKEYS remains stable during concurrent read-only access';
+    is test_hv_array($hash, $iterations), 4,
+        'HvARRAY/HvMAX traversal repeatedly sees all entries in a stable hash';
 }
 
-done_testing(); # Automatically determines the number of tests
- 
+done_testing;
+
 __DATA__
 __C__
- 
-/* C function parallelized with OpenMP */
+
 int _check_num_threads() {
-  int ret = 0;
-    
-  PerlOMP_GETENV_BASIC
-   
-  #pragma omp parallel
-  {
-    #pragma omp single
-    ret = omp_get_num_threads();
-  }
- 
-  return ret;
-}
-
-// Function to start parallel fetch using OpenMP in an attempt
-// to induce some sort of memory allocation issues
-SV* test_hv_fetch(HV *hash, AV *keys, int iterations) {
-    // Get the number of keys in the provided AV* (key array)
-    int key_count = av_len(keys) + 1;  // av_len is 0-based, so we add 1 to get the total count
-
+    int ret = 0;
     PerlOMP_GETENV_BASIC
 
-    // Convert the result (int found_count) to an SV (Scalar Value)
-    SV *result;
-        
-    // Parallelize the loop using OpenMP
     #pragma omp parallel
     {
-      int found_count;
-      #pragma omp for
-      for (int i = 0; i < iterations; i++) {
-        found_count = 0;
-        for (int j = 0; j < key_count; j++) {
-            SV *key_sv = *av_fetch(keys, j, 0);  // Fetch the key from the Perl array
-            if (key_sv) {
-                STRLEN len;
-                char *key = SvPV(key_sv, len);  // Get the key as a C string
-                SV **value = hv_fetch(hash, key, len, 0); // Perform hv_fetch
-                if (value != NULL) {
-                    found_count++;
-                }
-            }
-        }
-      }
-
-      #pragma omp single
-      result = newSViv(found_count);  // Create a new SV from the found count (int)
+        #pragma omp single
+        ret = omp_get_num_threads();
     }
-
-    return result;
+    return ret;
 }
 
-// Function to start parallel checks using hv_exists in an attempt
-// to induce memory allocation issues or segmentation faults
-SV* test_hv_exists(HV *hash, AV *keys, int iterations) {
-    // Get the number of keys in the provided AV* (key array)
-    int key_count = av_len(keys) + 1;  // av_len is 0-based, so we add 1 to get the total count
-
+SV* test_hv_fetch(HV *hash, int iterations) {
+    static const char *keys[] = { "key1", "key2", "key3", "key4" };
+    long mismatches = 0;
     PerlOMP_GETENV_BASIC
 
-    // Convert the result (int found_count) to an SV (Scalar Value)
-    SV *result;
-        
-    // Parallelize the loop using OpenMP
-    #pragma omp parallel
-    {
-      int found_count;
-      #pragma omp for
-      for (int i = 0; i < iterations; i++) {
-        found_count = 0;
-        for (int j = 0; j < key_count; j++) {
-            SV *key_sv = *av_fetch(keys, j, 0);  // Fetch the key from the Perl array
-            if (key_sv) {
-                STRLEN len;
-                char *key = SvPV(key_sv, len);  // Get the key as a C string
-                // Check if the key exists in the hash
-                if (hv_exists(hash, key, len)) {
-                    found_count++;  // Increment count if key exists
-                }
-            }
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        int found = 0;
+        for (int j = 0; j < 4; ++j) {
+            SV **value = hv_fetch(hash, keys[j], 4, 0);
+            if (value && *value)
+                ++found;
         }
-      }
-
-      #pragma omp single
-      result = newSViv(found_count);  // Create a new SV from the found count (int)
+        if (found != 4)
+            ++mismatches;
     }
 
-    return result;
+    return newSViv(mismatches == 0 ? 4 : -1);
 }
 
-// Function to simulate parallel access to the same hash entry using hv_iterval
+SV* test_hv_exists(HV *hash, int iterations) {
+    static const char *keys[] = { "key1", "key2", "key3", "key4" };
+    long mismatches = 0;
+    PerlOMP_GETENV_BASIC
+
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        int found = 0;
+        for (int j = 0; j < 4; ++j) {
+            if (hv_exists(hash, keys[j], 4))
+                ++found;
+        }
+        if (found != 4)
+            ++mismatches;
+    }
+
+    return newSViv(mismatches == 0 ? 4 : -1);
+}
+
 SV* test_hv_iterval(HV *hash, int iterations) {
-    // Result to store the count of accesses
-    int found_count = 0;
-
+    I32 expected = HvKEYS(hash);
+    HE **entries;
+    HE *he;
+    I32 n_entries = 0;
+    long failures = 0;
     PerlOMP_GETENV_BASIC
-    
-    // Initialize the result variable (this is just an example, the logic can be adjusted based on your needs)
-    SV *result = NULL;
 
-    // Iterate over the hash keys
+    entries = (HE**)malloc((size_t)expected * sizeof(*entries));
+    if (!entries)
+        croak("native allocation failed while staging HE pointers");
+
+    /* Iterator state is advanced only on the calling thread. */
     hv_iterinit(hash);
+    while ((he = hv_iternext(hash)) != NULL && n_entries < expected)
+        entries[n_entries++] = he;
 
-    for (int i = 0; i < iterations; i++) {
-      HE *he;
-      found_count = 0;
-      while ((he = hv_iternext(hash)) != NULL) {
-        #pragma omp parallel
-        {
-          // Access the value associated with this hash entry using hv_iterval
-          SV *entry_value = hv_iterval(hash, he);  // This gets the value corresponding to this key
-          // We simulate some processing (could be a dummy check or access to the value)
-          if (entry_value) {
-            // Parallelize the loop where threads are accessing the same hash entry
-            // Access the value at the same hash entry
-            SV *value = hv_iterval(hash, he);  // All threads access the same entry
-            #pragma omp single
-            if (value != NULL) {
-                found_count++;  // Count successful accesses
-            }
-          }
+    #pragma omp parallel for reduction(+:failures)
+    for (int i = 0; i < iterations; ++i) {
+        for (I32 j = 0; j < n_entries; ++j) {
+            if (hv_iterval(hash, entries[j]) == NULL)
+                ++failures;
         }
-      }
     }
 
-    // Convert the result to an SV (Scalar Value) and return
-    result = newSViv(found_count);
-    return result;
+    free(entries);
+    return newSViv(failures == 0 ? n_entries : -1);
 }
 
-// Function to test HvKEYS in a parallel context
-//  Note: attempt to break up "omp parallel" and "omp for" or
-//  to use an "omp single" to get the count results in a compiler
-//  error regarding the expansion of HeKEY ...
 SV* test_hv_keys(HV *hash, int iterations) {
-    int total_keys = 0;
-
+    I32 expected = HvKEYS(hash);
+    long mismatches = 0;
     PerlOMP_GETENV_BASIC
 
-    // Parallelize the loop using OpenMP
-    int my_num_keys = 0;
-    #pragma omp parallel for
-    for (int i = 0; i < iterations; i++) {
-      // HvKEYS provides the number of keys in the hash
-      my_num_keys = HvKEYS(hash);
-      int tid = omp_get_thread_num();
-      if (tid == 0) {
-        total_keys = my_num_keys;
-      }
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        if (HvKEYS(hash) != expected)
+            ++mismatches;
     }
-
-    // Return the result as a Perl scalar value (SV)
-    return newSViv(total_keys);
+    return newSViv(mismatches == 0 ? expected : -1);
 }
 
 SV* test_hv_usedkeys(HV *hash, int iterations) {
-    int total_keys = 0;
-
+    I32 expected = HvUSEDKEYS(hash);
+    long mismatches = 0;
     PerlOMP_GETENV_BASIC
 
-    // Parallelize the loop using OpenMP
-    int my_num_keys = 0;
-    #pragma omp parallel for
-    for (int i = 0; i < iterations; i++) {
-      // HvKEYS provides the number of keys in the hash
-      my_num_keys = HvUSEDKEYS(hash);
-      int tid = omp_get_thread_num();
-      if (tid == 0) {
-        total_keys = my_num_keys;
-      }
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        if (HvUSEDKEYS(hash) != expected)
+            ++mismatches;
     }
-
-    // Return the result as a Perl scalar value (SV)
-    return newSViv(total_keys);
+    return newSViv(mismatches == 0 ? expected : -1);
 }
 
 SV* test_hv_totalkeys(HV *hash, int iterations) {
-    int total_keys = 0;
-
+    I32 expected = HvTOTALKEYS(hash);
+    long mismatches = 0;
     PerlOMP_GETENV_BASIC
 
-    // Parallelize the loop using OpenMP
-    int my_num_keys = 0;
-    #pragma omp parallel for
-    for (int i = 0; i < iterations; i++) {
-      // HvKEYS provides the number of keys in the hash
-      my_num_keys = HvUSEDKEYS(hash);
-      int tid = omp_get_thread_num();
-      if (tid == 0) {
-        total_keys = my_num_keys;
-      }
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        if (HvTOTALKEYS(hash) != expected)
+            ++mismatches;
     }
-
-    // Return the result as a Perl scalar value (SV)
-    return newSViv(total_keys);
+    return newSViv(mismatches == 0 ? expected : -1);
 }
 
-// Function to test HvARRAY() in parallel with each thread calling it
-//  Note: attempt to break up "omp parallel" and "omp for" or
-//  to use an "omp single" to get the count results in a compiler
-//  error regarding the expansion of HeKEY ...
 SV* test_hv_array(HV *hash, int iterations) {
-    int total_keys = 0;
-
+    I32 expected = HvKEYS(hash);
+    long mismatches = 0;
     PerlOMP_GETENV_BASIC
 
-    // Parallelize using OpenMP, each thread calls HvARRAY and iterates independently
-    #pragma omp parallel for
-    for (int i = 0; i < iterations; i++) {
-      int my_num_keys = 0;
-      HE **buckets = HvARRAY(hash); // Each thread gets its own array of hash entries
-      int n_buckets = HvMAX(hash);
-      for (int j=0; j < n_buckets; j++) {
-        HE *he= buckets[j];
-        while (he) {
-          //print_he_key(he); // complicated code...
-          //print_sv(HeVAL(he));
-          he = HeNEXT(he);
-          ++my_num_keys;
+    #pragma omp parallel for reduction(+:mismatches)
+    for (int i = 0; i < iterations; ++i) {
+        I32 local_count = 0;
+        HE **buckets = HvARRAY(hash); /* pointer to the shared, stable bucket array */
+        STRLEN n_buckets = (STRLEN)HvMAX(hash) + 1;
+
+        for (STRLEN j = 0; j < n_buckets; ++j) {
+            HE *he = buckets[j];
+            while (he) {
+                ++local_count;
+                he = HeNEXT(he);
+            }
         }
-      }
-      int tid = omp_get_thread_num();
-      if (tid == 0) {
-        total_keys = my_num_keys;
-      }
+
+        if (local_count != expected)
+            ++mismatches;
     }
 
-    // Return the total found count as an SV
-    return newSViv(total_keys);
+    return newSViv(mismatches == 0 ? expected : -1);
 }
-
-//// exposes hv_iternext/iterinit as not thread safe
-//SV* test_hv_iternext(HV *hash, AV *keys, int iterations) {
-//    // Get the number of keys in the provided AV* (key array)
-//    int key_count = av_len(keys) + 1;  // av_len is 0-based, so we add 1 to get the total count
-//
-//    // Set OpenMP environment for parallel execution
-//    PerlOMP_GETENV_BASIC
-//
-//    // Convert the result (int found_count) to an SV (Scalar Value)
-//    SV *result;
-//        
-//    // Parallelize the loop using OpenMP
-//    #pragma omp parallel
-//    {
-//      // Initialize found_count inside the parallel block
-//      int found_count = 0; 
-//
-//      #pragma omp for
-//      for (int i = 0; i < iterations; i++) {
-//        // Initialize hash iteration using hv_iterinit
-//        HE *he;
-//        hv_iterinit(hash);  // Initialize iteration over the hash
-//        
-//        // Iterate over the hash entries
-//        while ((he = hv_iternext(hash)) != NULL) {  // Iterate over the hash entries
-//            SV *key_sv = HeKEY(he);  // Fetch the key from the hash entry
-//            if (key_sv) {
-//                STRLEN len;
-//                char *key = SvPV(key_sv, len);  // Get the key as a C string
-//
-//                // Perform hv_fetch for the current key
-//                SV **value = hv_fetch(hash, key, len, 0);
-//                if (value != NULL) {
-//                    found_count++;  // Increment if key found
-//                }
-//            }
-//        }
-//      }
-//
-//      #pragma omp single
-//      result = newSViv(found_count);  // Create a new SV from the found count (int)
-//    }
-//
-//    return result;
-//}
 
 __END__
-

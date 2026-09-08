@@ -37,3 +37,11 @@ Perl+OpenMP CPAN stack. The active Perl files were syntax-checked with stubbed
 imports, and their embedded C bodies were checked with GCC `-fopenmp
 -fsyntax-only` against the available Perl 5.40 headers. A real `prove -lv t`
 run should be performed after these files are placed in the project environment.
+
+## CI additions
+
+The publication snapshot now includes `.github/workflows/ci.yml`, a compact
+Linux regression matrix, a full Perl 5.40.0 stress job, deterministic boundary
+controls in `xt/control/`, and `script/report-environment.pl` so CI logs record
+the actual compiler/module environment used by each run. These CI results are
+explicitly separated from the historical Perl 5.40.0/GCC 12.2.0 experiment.

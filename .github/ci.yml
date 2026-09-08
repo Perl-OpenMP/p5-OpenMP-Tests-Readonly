@@ -1,0 +1,100 @@
+name: Perl/OpenMP readonly CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke - Perl ${{ matrix.perl }} / ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        perl:
+          - '5.40.0'
+          - '5.42'
+          - '5.44'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl }}
+
+      - name: Install system OpenMP prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgomp1
+
+      - name: Install CPAN prerequisites
+        run: cpanm --notest --installdeps .
+
+      - name: Report exact CI environment
+        run: |
+          perl script/report-environment.pl
+          echo
+          echo '--- system compiler ---'
+          gcc --version
+          echo
+          echo '--- libgomp resolution ---'
+          gcc -print-file-name=libgomp.so || true
+          ldconfig -p 2>/dev/null | grep -E 'libgomp\.so' || true
+
+      - name: Run deterministic boundary controls
+        run: prove -lv xt/control
+
+      - name: Run readonly smoke suite
+        env:
+          PERL_OPENMP_MAX_THREADS: '4'
+          PERL_OPENMP_ITERATIONS: '10000'
+        run: prove -lv t
+
+  stress-perl-5-40:
+    name: Full stress - Perl 5.40.0
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Perl 5.40.0
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.40.0'
+
+      - name: Install system OpenMP prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgomp1
+
+      - name: Install CPAN prerequisites
+        run: cpanm --notest --installdeps .
+
+      - name: Report exact CI environment
+        run: |
+          perl script/report-environment.pl
+          echo
+          echo '--- system compiler ---'
+          gcc --version
+          echo
+          echo '--- libgomp resolution ---'
+          gcc -print-file-name=libgomp.so || true
+          ldconfig -p 2>/dev/null | grep -E 'libgomp\.so' || true
+
+      - name: Run publication-shape stress suite
+        env:
+          PERL_OPENMP_MAX_THREADS: '16'
+          PERL_OPENMP_ITERATIONS: '1000000'
+        run: prove -lv t
+

@@ -96,3 +96,34 @@ source if a permanent software citation is desired.
 ## License
 
 Same terms as Perl 5 itself. See `LICENSE`.
+
+## Continuous integration
+
+GitHub Actions runs two complementary forms of CI:
+
+1. **Smoke/regression matrix** -- current compatible dependencies on Perl
+   5.40.0, 5.42, and 5.44, using a reduced four-thread/10,000-iteration stress
+   run so regressions can be found quickly.
+2. **Perl 5.40.0 full stress job** -- the publication-shaped defaults of one
+   through sixteen OpenMP threads and 1,000,000 hash stress iterations. This
+   heavier job runs on pushes to `master` and on manual workflow dispatch, not
+   on every pull request.
+
+Every CI job prints `perl -V`-equivalent compiler information, the installed
+Perl+OpenMP module versions, `Alien::OpenMP` build flags, the runner GCC
+version, and the resolved `libgomp` path before running tests. This is important
+because CI images and CPAN releases change over time.
+
+The Perl 5.40.0 CI job is **not described as an exact reproduction of the paper
+environment unless its emitted environment record actually shows GCC 12.2.0
+and otherwise matches the historical setup**. The paper's reported experiment
+remains Perl 5.40.0 built with GCC 12.2.0 and GNU libgomp. CI on current GitHub
+runners is regression/portability evidence unless that exact match is
+established from the job log.
+
+The deterministic controls under `xt/control/` do not intentionally trigger
+concurrent corruption. Instead they demonstrate, serially, two important
+boundary conditions used by the paper: `av_fetch(..., 1)` can grow an AV, and
+`hv_iterinit`/`hv_iternext` consume iterator state. The normal OpenMP suite in
+`t/` therefore exercises `av_fetch(..., 0)` and avoids sharing Perl's HV
+iterator state between workers.

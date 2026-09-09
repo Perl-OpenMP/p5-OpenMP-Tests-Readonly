@@ -15,6 +15,9 @@ The cleanup is intentionally conservative:
 * moves Perl allocation used to construct test return values out of OpenMP
   worker regions, so the harness isolates the read operation under test;
 * activates an explicit `AvARRAY` read test matching the paper's AV table;
+* uses ordinary `int` parameters at the Inline::C-visible AV index boundary and
+  casts to Perl's `SSize_t` internally, avoiding wrapper-generation failures
+  without changing the tested C API semantics;
 * keeps AV structural growth outside worker regions;
 * isolates `hv_fetch`/`hv_exists` from unrelated AV/SvPV reads by using fixed
   native C keys for the fixed test hash;
@@ -31,12 +34,20 @@ The cleanup is intentionally conservative:
 * documents unsafe negative cases separately rather than leaving WIP/commented
   experiments in the passing suite.
 
-No claim is made here that the cleaned snapshot was executed on the historical
-paper environment inside the ChatGPT build container. The container lacks the
-Perl+OpenMP CPAN stack. The active Perl files were syntax-checked with stubbed
-imports, and their embedded C bodies were checked with GCC `-fopenmp
--fsyntax-only` against the available Perl 5.40 headers. A real `prove -lv t`
-run should be performed after these files are placed in the project environment.
+An initial GitHub Actions run on 2026-09-08 exercised the cleaned harness with
+Perl 5.40.0 and current compatible dependencies. In that run the scalar suite
+completed 400 assertions successfully and the hash suite completed 128
+assertions successfully, including the publication-shaped 1,000,000-iteration
+hash stress configuration. The array suite stopped after its first two passing
+assertions because Inline::C did not generate wrappers for helpers that exposed
+`SSize_t` as a Perl-callable parameter type. This candidate changes only that
+wrapper boundary to ordinary `int` parameters and casts to `SSize_t` inside the
+C helpers. A fresh CI run is required before the snapshot is tagged for arXiv.
+
+The 2026 CI environment is regression evidence, not an exact reproduction of
+the historical paper environment: the paper reports Perl 5.40.0 built with GCC
+12.2.0 and GNU libgomp, while the first GitHub Actions Perl 5.40.0 run reported
+a Perl built with GCC 11.4.0 and a runner toolchain using GCC 13.3.0.
 
 ## CI additions
 

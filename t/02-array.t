@@ -81,7 +81,7 @@ SV* test_av_len(SV* input) {
     return newSViv((IV)observed);
 }
 
-SV* test_av_fetch(SV* array_ref, SSize_t index, int lval) {
+SV* test_av_fetch(SV* array_ref, int index, int lval) {
     AV *array;
     SV *observed = NULL;
     PerlOMP_GETENV_BASIC
@@ -90,9 +90,10 @@ SV* test_av_fetch(SV* array_ref, SSize_t index, int lval) {
         return &PL_sv_undef;
 
     array = (AV*)SvRV(array_ref);
+    SSize_t idx = (SSize_t)index;
     #pragma omp parallel
     {
-        SV **fetched = av_fetch(array, index, lval);
+        SV **fetched = av_fetch(array, idx, lval);
         SV *local = (fetched && *fetched) ? *fetched : NULL;
         #pragma omp single
         observed = local;
@@ -102,7 +103,7 @@ SV* test_av_fetch(SV* array_ref, SSize_t index, int lval) {
     return observed ? newSVsv(observed) : &PL_sv_undef;
 }
 
-SV* test_av_exists(SV* array_ref, SSize_t index) {
+SV* test_av_exists(SV* array_ref, int index) {
     AV *array;
     int observed = 0;
     PerlOMP_GETENV_BASIC
@@ -111,9 +112,10 @@ SV* test_av_exists(SV* array_ref, SSize_t index) {
         return &PL_sv_undef;
 
     array = (AV*)SvRV(array_ref);
+    SSize_t idx = (SSize_t)index;
     #pragma omp parallel
     {
-        int local = av_exists(array, index) ? 1 : 0;
+        int local = av_exists(array, idx) ? 1 : 0;
         #pragma omp single
         observed = local;
     }

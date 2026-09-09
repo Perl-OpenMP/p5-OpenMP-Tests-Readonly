@@ -29,7 +29,7 @@ historical software environment exactly.
 
 ## Publication harness
 
-The passing tests in `t/` preserve the operations studied in the paper while
+The publication tests in `t/` preserve the operations studied in the paper while
 removing unrelated worker-thread mutation from the harness itself. In
 particular, Perl scalar/array allocation used to return test results now occurs
 after OpenMP worker regions have completed. The hash tests also stage iterator

@@ -31,8 +31,9 @@ done_testing;
 __DATA__
 __C__
 
-SV* serial_av_fetch_growth(AV *av, SSize_t index) {
-    SV **slot = av_fetch(av, index, 1);
+SV* serial_av_fetch_growth(AV *av, int index) {
+    SSize_t idx = (SSize_t)index;
+    SV **slot = av_fetch(av, idx, 1);
     if (!slot)
         return &PL_sv_undef;
     return newSViv((IV)av_len(av));
